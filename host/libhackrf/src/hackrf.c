@@ -262,6 +262,11 @@ int ADDCALL hackrf_exit(void)
 
 int ADDCALL hackrf_open(hackrf_device** device)
 {
+	return hackrf_open(hackrf_device, -1);
+}
+
+int ADDCALL hackrf_open(hackrf_device** device, uint8_t hackrf_serial)
+{
 	int result;
 	libusb_device_handle* usb_device;
 	hackrf_device* lib_device;
@@ -270,14 +275,75 @@ int ADDCALL hackrf_open(hackrf_device** device)
 	{
 		return HACKRF_ERROR_INVALID_PARAM;
 	}
+	
+	//Warn user if:
+	//The HackRF is on a USB 1.0 bus
+	//There are other devices on the bus where the HackRF is attached
+	
+	//Allow the user to specify the serial number when calling hackrf_open()
+	
+	//LibUSB procedure:
+        //1. Discover devices using libusb_get_device_list().
+        libusb_device **list;
+        libusb_device *found = NULL;
+        uint16_t devices_on_bus[127]; //I don't think more than 127 buses are allowed?
+        ssize_t cnt = libusb_get_device_list(NULL, &list);
+        ssize_t i = 0;
+        int err = 0;
+        if (cnt < 0)
+        	return HACKRF_ERROR_NOT_FOUND;
 
+	
+        //2. Choose the device that you want to operate, and call libusb_open().
+        for (i = 0; i < cnt; i++) {
+		libusb_device *device = list[i];
+		libusb_device_descriptor *descriptor;
+		libusb_get_device_descriptor(device, descriptor);
+		devices_on_bus[ libusb_get_bus_number(device) ]++; //one more device is on this bus
+		if (descriptor->idVendor == hackrf_usb_vid &&
+		      (descriptor->idProduct == hackrf_one_usb_pid ||
+		       descriptor->idProduct == hackrf_jawbreaker_usb_pid) ) {
+		       	if (hackrf_serial == -1 ||   //no serial request, first device gets it
+		       	    descriptor->iSerialNumber == hackrf_serial) {
+		       		found = device;
+		       		break;
+		       	}
+		}
+	}
+	if (libusb_get_device_speed(found) == LIBUSB_SPEED_LOW || 
+	    libusb_get_device_speed(found) == LIBUSB_SPEED_FULL) {
+	    	// Warn user that they are using a USB 1.0 port
+	    	printf("Warning: It looks like you have the HackRF connected to a USB 1.0 port, performance impacted.\n");
+	}
+	if (devices_on_bus[ libusb_get_bus_number(found) ] > 1) {
+		// Warn user there is more than one device on bus
+		// and it could impact performance
+		printf("Warning: It looks like there is more than one device on the bus the HackRF is connected to, performance impacted.\n");
+	}
+	if (found) {
+		err = libusb_open(found, &usb_device);
+		if (err != LIBUSB_SUCCESS) {
+			return HACKRF_ERROR_NOT_FOUND;
+			// output this string for a better error?
+			//  libusb_error_name(err)
+			printf("%s\n", libusb_error_name(err));
+		}
+	}
+        
+        //3. Unref all devices in the discovered device list.
+        //4. Free the discovered device list.
+        //For convenience, the libusb_free_device_list() function includes a parameter to optionally unreference all the devices in the list before freeing the list itself. This combines steps 3 and 4 above.
+	libusb_free_device_list(list, 1);
+
+//----------------------------------
 	// TODO: Do proper scanning of available devices, searching for
 	// unit serial number (if specified?).
-	usb_device = libusb_open_device_with_vid_pid(g_libusb_context, hackrf_usb_vid, hackrf_one_usb_pid);
-	if( usb_device == NULL )
-	{
-		usb_device = libusb_open_device_with_vid_pid(g_libusb_context, hackrf_usb_vid, hackrf_jawbreaker_usb_pid);
-	}
+	
+	//usb_device = libusb_open_device_with_vid_pid(g_libusb_context, hackrf_usb_vid, hackrf_one_usb_pid);
+	//if( usb_device == NULL )
+	//{
+	//	usb_device = libusb_open_device_with_vid_pid(g_libusb_context, hackrf_usb_vid, hackrf_jawbreaker_usb_pid);
+	//}
 	if( usb_device == NULL )
 	{
 		return HACKRF_ERROR_NOT_FOUND;
